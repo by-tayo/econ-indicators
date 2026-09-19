@@ -1,22 +1,22 @@
-# econ-indicators
+# Economic Indicators
 
-A small research pipeline built around the indicator list in *Investing 101* (Michele Cagan): GDP, CPI, Consumer Confidence, Job Growth, Initial Unemployment Claims, Housing Starts, the Leading Economic Index, Business Inventories, and PPI. Rather than just tracking them on a dashboard, this project builds a **composite leading index from the genuinely leading indicators, and backtests it against actual NBER recessions** — with a documented, non-black-box methodology and an honest report of where it worked and where it didn't.
+A small research pipeline built around the indicator list in *Investing 101* (Michele Cagan): GDP, CPI, Consumer Confidence, Job Growth, Initial Unemployment Claims, Housing Starts, the Leading Economic Index, Business Inventories, and PPI. Rather than just tracking them on a dashboard, this project builds a **composite leading index from the genuinely leading indicators, and backtests it against actual NBER recessions** with a documented, non-black-box methodology and an honest report of where it worked and where it didn't.
 
 Companion project: [pce-compare](https://github.com/by-tayo/pce-compare) (personal spending vs. national PCE benchmarks).
 
 ## Why not just use all 9 indicators as "leading"?
 
-The book's list mixes indicators that sit in different places in the business cycle. Feeding lagging indicators like CPI or GDP into a *leading* index would blunt its lead time — by the time GDP confirms a slowdown, it's already happened. So each indicator is classified, and only the leading ones feed the composite. The rest are tracked for context.
+The book's list mixes indicators that sit in different places in the business cycle. Feeding lagging indicators like CPI or GDP into a *leading* index would blunt its lead time by the time GDP confirms a slowdown, it's already happened. So each indicator is classified, and only the leading ones feed the composite. The rest are tracked for context.
 
 | Indicator | FRED series | Class | In composite? | What it measures |
 |---|---|---|---|---|
-| Initial Unemployment Claims (UI) | [`ICSA`](https://fred.stlouisfed.org/series/ICSA) | Leading | ✅ (inverted) | New jobless benefit claims each week — one of the fastest-moving signals of labor market stress. |
-| Housing Starts | [`HOUST`](https://fred.stlouisfed.org/series/HOUST) | Leading | ✅ | New residential construction starts — sensitive to interest rates and confidence, moves before broader activity. |
+| Initial Unemployment Claims (UI) | [`ICSA`](https://fred.stlouisfed.org/series/ICSA) | Leading | ✅ (inverted) | New jobless benefit claims each week, one of the fastest-moving signals of labor market stress. |
+| Housing Starts | [`HOUST`](https://fred.stlouisfed.org/series/HOUST) | Leading | ✅ | New residential construction starts, sensitive to interest rates and confidence, moves before broader activity. |
 | 10Y-3M Treasury Yield Spread | [`T10Y3M`](https://fred.stlouisfed.org/series/T10Y3M) | Leading | ✅ | The spread between long- and short-term Treasury yields. A narrowing or inverted (negative) spread has preceded every recession since 1970 and is one of the ten components of the Conference Board's actual Leading Economic Index. Replaces PPI (see note below). |
 | Consumer Confidence (CC) | [`UMCSENT`](https://fred.stlouisfed.org/series/UMCSENT) | Leading | ✅ | University of Michigan Consumer Sentiment. The Conference Board's own Consumer Confidence Index isn't freely available on FRED, so this widely-used free equivalent stands in for it. |
-| Job Growth | [`PAYEMS`](https://fred.stlouisfed.org/series/PAYEMS) | Coincident | Dashboard only | Total nonfarm payroll employment — confirms the cycle roughly in real time rather than ahead of it. |
-| GDP | [`GDPC1`](https://fred.stlouisfed.org/series/GDPC1) | Coincident/Lagging | Dashboard only | Real GDP — the broadest measure of output, but reported quarterly and revised after the fact. |
-| CPI | [`CPIAUCSL`](https://fred.stlouisfed.org/series/CPIAUCSL) | Lagging | Dashboard only | Consumer Price Index — headline inflation, the main driver of Fed rate decisions per the book's thesis, but a lagging confirmation of price pressure that already happened. |
+| Job Growth | [`PAYEMS`](https://fred.stlouisfed.org/series/PAYEMS) | Coincident | Dashboard only | Total nonfarm payroll employment confirms the cycle roughly in real time rather than ahead of it. |
+| GDP | [`GDPC1`](https://fred.stlouisfed.org/series/GDPC1) | Coincident/Lagging | Dashboard only | Real GDP - the broadest measure of output, but reported quarterly and revised after the fact. |
+| CPI | [`CPIAUCSL`](https://fred.stlouisfed.org/series/CPIAUCSL) | Lagging | Dashboard only | Consumer Price Index - headline inflation, the main driver of Fed rate decisions per the book's thesis, but a lagging confirmation of price pressure that already happened. |
 | Business Inventories | [`BUSINV`](https://fred.stlouisfed.org/series/BUSINV) | Lagging | Dashboard only | Total business inventories — tends to build up *after* demand has already turned. |
 | Producer Price Index (PPI) | [`PPIACO`](https://fred.stlouisfed.org/series/PPIACO) | Lagging | Dashboard only | Prices producers receive for output. Inflation is a *lagging* indicator in the Conference Board's own framework — it isn't one of the ten LEI components — so it's tracked for context but no longer feeds the composite. See "What changed" below. |
 
@@ -41,7 +41,7 @@ Latest value per indicator vs. 12 months prior (`python 06_snapshot.py`, as of t
 | Business Inventories | lagging | 2,764,708 | 2026-07-01 | 2,663,019 | Rising |
 | Producer Price Index | lagging | 287.93 | 2026-08-01 | 262.11 | Rising |
 
-Note "Falling" for Initial Claims is *good* news (fewer people filing for unemployment) — direction alone doesn't say good or bad the same way across every row, which is exactly why the indicator table above spells out what each series measures.
+Note "Falling" for Initial Claims is *good* news (fewer people filing for unemployment) direction alone doesn't say good or bad the same way across every row, which is exactly why the indicator table above spells out what each series measures.
 
 ![Leading indicators panel](output/indicator_panel.png)
 
