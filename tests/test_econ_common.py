@@ -10,6 +10,7 @@ from econ_common import (
     recession_periods,
     smooth,
     to_monthly,
+    walkforward_zscore,
     zscore,
 )
 
@@ -33,6 +34,27 @@ def test_zscore_rejects_constant_series():
     s = pd.Series([5, 5, 5], dtype=float)
     with pytest.raises(ValueError):
         zscore(s)
+
+
+def test_walkforward_zscore_ignores_future_values():
+    # A large spike late in the series should not shift the standardization
+    # of points scored long before it happened.
+    idx = monthly_index("2020-01-01", 10)
+    baseline = pd.Series([1, 2, 3, 4, 1, 2, 3, 4] + [1000, 1000], index=idx, dtype=float)
+    without_spike = walkforward_zscore(baseline, min_periods=4)
+    with_bigger_spike = baseline.copy()
+    with_bigger_spike.iloc[-1] = 1_000_000
+    with_spike = walkforward_zscore(with_bigger_spike, min_periods=4)
+    # Points before the spike are computed from an expanding window that
+    # hasn't reached the spike yet, so they're identical either way.
+    assert without_spike.iloc[:8].equals(with_spike.iloc[:8])
+
+
+def test_walkforward_zscore_nan_before_min_periods():
+    s = pd.Series([1.0, 2.0, 3.0, 4.0, 5.0], index=monthly_index("2020-01-01", 5))
+    z = walkforward_zscore(s, min_periods=3)
+    assert z.iloc[:2].isna().all()
+    assert not pd.isna(z.iloc[2])
 
 
 def test_to_monthly_mean_resamples_weekly():
@@ -89,6 +111,15 @@ def test_build_composite_only_uses_overlapping_dates():
     b = pd.Series([1.0, 2.0], index=monthly_index("2020-01-01", 2))
     composite = build_composite({"a": a, "b": b})
     assert len(composite) == 2
+
+
+def test_build_composite_accepts_alternate_standardize_fn():
+    idx = monthly_index("2020-01-01", 6)
+    a = pd.Series([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], index=idx)
+    composite = build_composite({"a": a}, weights={"a": 1.0}, standardize=walkforward_zscore)
+    # walkforward_zscore(min_periods=24) never has enough history in a
+    # 6-point series, so every point is dropped by the post-standardize dropna.
+    assert composite.empty
 
 
 # ---------------------------------------------------------------------------

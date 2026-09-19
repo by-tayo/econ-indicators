@@ -36,7 +36,11 @@ INDICATORS = {
         "name": "Producer Price Index",
         "cls": "leading",
         "resample": "mean",
-        "invert": False,
+        # Rising producer prices are a warning sign, not good news: commodity
+        # price spikes preceded the 1974, 1980, and 2008 recessions (they're
+        # what pushes the Fed to tighten). Invert so a PPI spike pulls the
+        # composite down like the other three components.
+        "invert": True,
         "in_composite": True,
     },
     "UMCSENT": {
@@ -151,13 +155,27 @@ def zscore(s: pd.Series) -> pd.Series:
     return (s - s.mean()) / std
 
 
+def walkforward_zscore(s: pd.Series, min_periods: int = 24) -> pd.Series:
+    """Standardize each point using only the mean/std of history up to and
+    including that point (an expanding window), so scoring an early date
+    never leaks information from later in the sample the way a full-history
+    zscore does. Points before `min_periods` of history are NaN.
+    """
+    mean = s.expanding(min_periods=min_periods).mean()
+    std = s.expanding(min_periods=min_periods).std()
+    return (s - mean) / std
+
+
 def build_composite(
     components: dict[str, pd.Series],
     weights: dict[str, float] | None = None,
     invert: set[str] | frozenset[str] = frozenset(),
+    standardize=zscore,
 ) -> pd.Series:
-    """Align components on a common index, z-score each, invert sign where
-    noted, and combine with a weighted sum. Weights must sum to 1.
+    """Align components on a common index, standardize each (full-history
+    zscore by default; pass `standardize=walkforward_zscore` for a
+    backtest-safe expanding standardization), invert sign where noted, and
+    combine with a weighted sum. Weights must sum to 1.
     """
     if weights is None:
         weights = {k: 1.0 / len(components) for k in components}
@@ -170,7 +188,7 @@ def build_composite(
     if df.empty:
         raise ValueError("no overlapping dates across components")
 
-    z = df.apply(zscore)
+    z = df.apply(standardize).dropna(how="any")
     for name in invert:
         if name in z.columns:
             z[name] = -z[name]

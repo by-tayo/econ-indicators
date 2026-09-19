@@ -12,7 +12,7 @@ The book's list mixes indicators that sit in different places in the business cy
 |---|---|---|---|---|
 | Initial Unemployment Claims (UI) | [`ICSA`](https://fred.stlouisfed.org/series/ICSA) | Leading | ✅ (inverted) | New jobless benefit claims each week — one of the fastest-moving signals of labor market stress. |
 | Housing Starts | [`HOUST`](https://fred.stlouisfed.org/series/HOUST) | Leading | ✅ | New residential construction starts — sensitive to interest rates and confidence, moves before broader activity. |
-| Producer Price Index (PPI) | [`PPIACO`](https://fred.stlouisfed.org/series/PPIACO) | Leading | ✅ | Prices producers receive for output — feeds into future consumer prices (CPI). |
+| Producer Price Index (PPI) | [`PPIACO`](https://fred.stlouisfed.org/series/PPIACO) | Leading | ✅ (inverted) | Prices producers receive for output — feeds into future consumer prices (CPI). Rising PPI is a warning sign (it's what pushes the Fed to tighten), so it's inverted like Initial Claims. |
 | Consumer Confidence (CC) | [`UMCSENT`](https://fred.stlouisfed.org/series/UMCSENT) | Leading | ✅ | University of Michigan Consumer Sentiment. The Conference Board's own Consumer Confidence Index isn't freely available on FRED, so this widely-used free equivalent stands in for it. |
 | Job Growth | [`PAYEMS`](https://fred.stlouisfed.org/series/PAYEMS) | Coincident | Dashboard only | Total nonfarm payroll employment — confirms the cycle roughly in real time rather than ahead of it. |
 | GDP | [`GDPC1`](https://fred.stlouisfed.org/series/GDPC1) | Coincident/Lagging | Dashboard only | Real GDP — the broadest measure of output, but reported quarterly and revised after the fact. |
@@ -47,44 +47,45 @@ Note "Falling" for Initial Claims is *good* news (fewer people filing for unempl
 
 1. **Fetch** all series from FRED, caching raw pulls to `data/raw/` so reruns don't hit the API.
 2. **Align to monthly**: weekly claims are averaged per month; quarterly GDP is forward-filled; the rest are already monthly.
-3. **Normalize**: each of the 4 leading series is z-scored over its own full history. Initial Claims is inverted (rising claims is bad news, so its z-score is flipped) before combining.
-4. **Weight**: equal weight (25% each) across the 4 leading series — fixed before ever looking at backtest results, on purpose. Tuning weights against the same data used to score performance would make the backtest meaningless.
-5. **Combine**: weighted sum of z-scores, plus a 3-month moving average (the raw composite is noisy month to month).
-6. **Signal rule**: the composite crossing below **-0.5** (fixed a priori, never fit to the data) counts as a recession warning.
+3. **Transform**: each of the 4 leading series is converted to its month-over-month % change before anything else. Levels like PPI trend upward for decades, which would otherwise dominate the composite with a secular ramp instead of a cyclical signal — the change removes the trend and keeps the cycle.
+4. **Normalize**: each change series is z-scored with a **walk-forward (expanding) window** — the mean/std at any given month use only data up to and including that month, with at least 24 months of history required before a score is produced. A full-history z-score would let 1980's score be computed partly from data through 2026, which is a backtest leak; this isn't. Initial Claims and PPI are inverted (rising claims and rising producer prices are both bad news) before combining.
+5. **Weight**: equal weight (25% each) across the 4 leading series — fixed before ever looking at backtest results, on purpose. Tuning weights against the same data used to score performance would make the backtest meaningless.
+6. **Combine**: weighted sum of z-scores, plus a 3-month moving average (the raw composite is noisy month to month).
+7. **Signal rule**: the composite crossing below **-0.5** (fixed a priori, never fit to the data) counts as a recession warning.
 
 All of this lives in [`econ_common.py`](econ_common.py), covered by unit tests on synthetic data (`tests/test_econ_common.py`) — no network access required to verify the math.
 
+An earlier version of this pipeline z-scored raw levels over the full sample instead. That version scored 2/8 recessions, but the miss pattern tracked PPI's decades-long upward trend almost exactly (every miss was in the trending part of the sample) rather than anything about the economy — a methodology artifact, not a finding. See git history for the prior version if you want to compare.
+
 ## Backtest results
 
-Run against every U.S. recession from 1970 to 2020 (`python 03_backtest.py`):
+The composite needs 24 months of history to produce its first walk-forward score, and `UMCSENT` was only collected quarterly before 1978, so the composite's first valid reading is **1980-01** — it structurally cannot be scored against the 1970-02 or 1974-02 recessions, which fall before that. Run against every recession the composite can actually see (`python 03_backtest.py`):
 
 | Recession start | Signal date | Lead (months) | Caught? |
 |---|---|---|---|
-| 1970-02 | — | — | ❌ |
-| 1974-02 | — | — | ❌ |
-| 1980-02 | 1979-12 | 2 | ✅ |
-| 1981-08 | 1981-02 | 6 | ✅ |
-| 1990-08 | — | — | ❌ |
-| 2001-04 | — | — | ❌ |
-| 2008-01 | — | — | ❌ |
-| 2020-03 | — | — | ❌ |
+| 1980-02 | — | — | ❌ |
+| 1981-08 | 1980-03 | 17 | ✅ |
+| 1990-08 | 1990-08 | 0 | ✅ |
+| 2001-04 | 2001-01 | 3 | ✅ |
+| 2008-01 | 2007-11 | 2 | ✅ |
+| 2020-03 | 2020-03 | 0 | ✅ |
 
-**2/8 recessions caught**, average lead time when it did catch one: **4 months**. One false positive (a threshold crossing in **1991-11** with no recession following within 12 months).
+**5/6 recessions caught** (within the composite's coverage — 1970 and 1974 are out of reach, not misses), average lead time when it did catch one: **4.4 months**. But it also threw **8 false positives** — threshold crossings with no recession following within 12 months (2003-02, 2005-09, 2006-05, 2011-04, 2021-02, 2022-03, 2025-03, 2026-04) — against only 5 true signals, so a crossing is roughly as likely to be noise as a real warning.
 
 ![Composite index vs. NBER recessions](output/index_vs_recessions.png)
 
 ### Honest evaluation
 
-This composite is a **weak leading indicator by this backtest, not a reliable one.** It caught the early-1980s recessions (both preceded by the Fed's aggressive rate hikes, which visibly hit housing starts and sentiment ahead of time) but missed 1970, 1974, 1990, 2001, 2008, and 2020. Looking at the chart (`output/index_vs_recessions.png`), the composite often *does* dip around recessions — 1990, 2001, and 2008 all show visible drops — but the drop frequently arrives at or after the recession's official start rather than clearly ahead of it, so it doesn't register as a "hit" under this backtest's lead-time rule. A softer threshold or a shorter frequency (this analysis uses monthly resampling) would likely catch more of these at the cost of more false positives — that tradeoff is the whole reason the threshold is fixed and documented rather than tuned per-recession.
+Fixing the methodology (change instead of level, PPI's sign, walk-forward standardization — see the note above) moved the hit rate from a weak 2/8 to a strong-looking 5/6. That's not a free win, though: two of the five hits (1990 and 2020) have a **0-month lead** — the composite dropped below threshold the same month the recession started, which is a coincident confirmation, not an early warning, even though the backtest's rules count it as a hit. And the false-positive count went from 1 to 8, so the corrected index is far more trigger-happy. Read together, this composite is a **noisy leading indicator**: it does tend to dip around real recessions, often with genuine lead time (17, 3, and 2 months for 1981, 2001, and 2008), but it also dips just as often when nothing follows, and a chunk of its "hits" are same-month confirmations rather than advance warning.
 
-**2020 hold-out**: the threshold and weights were fixed using the general methodology above, without ever tuning against 2020 data. The composite **missed** the COVID recession — which makes sense in hindsight: this was a sudden external demand shock, not the kind of gradually-building imbalance (credit tightening, housing overbuilding, inventory glut) that indicators like claims, housing starts, and sentiment are built to catch ahead of time. A miss here is a legitimate finding about what this kind of index can and can't see, not a bug to paper over.
+**2020 hold-out**: the threshold and weights were fixed using the general methodology above, without ever tuning against 2020 data. The composite **caught** the COVID recession, though with 0 months of lead — it confirmed the downturn the month it started rather than anticipating it, which fits: a sudden external demand shock isn't the kind of gradually-building imbalance (credit tightening, housing overbuilding, inventory glut) these components are built to catch ahead of time.
 
 ### Limitations
 
 - Only 4 components, equally weighted — the official Conference Board LEI uses ~10 components with non-equal, empirically-derived weights (which this project deliberately avoids to keep the method transparent, at the cost of some accuracy).
-- `UMCSENT` was collected quarterly (not monthly) before 1978, so the composite has some sparse coverage in 1967-1977.
-- A -0.5 z-score threshold is one reasonable choice, not the only one; the backtest results would shift with a different threshold.
-- 8 recessions is a small sample — one or two additional hits/misses would meaningfully change the hit rate.
+- The 24-month walk-forward warm-up plus `UMCSENT`'s quarterly-before-1978 collection push the composite's usable history to 1980 onward, so it can only be scored against 6 of the 8 recessions since 1970.
+- A -0.5 z-score threshold is one reasonable choice, not the only one; the backtest results would shift with a different threshold, and a lower false-positive rate would likely need a stricter one.
+- 6 scoreable recessions is a small sample — one or two additional hits/misses would meaningfully change the hit rate.
 
 ## Setup
 
