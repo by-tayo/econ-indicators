@@ -17,6 +17,11 @@ OUTPUT = Path("output")
 # Only "leading" series feed the composite that gets backtested; the rest are
 # tracked for context/explanation but would blunt the composite's lead time
 # if mixed in (GDP and CPI, in particular, are reported well after the fact).
+#
+# "transform" says how each series is converted to a month-to-month change
+# before z-scoring (see transform_series): "pct" for series measured as
+# levels (claims, housing starts), "diff" for series already measured in
+# percent or as a bounded index (a yield spread, a sentiment index).
 INDICATORS = {
     "ICSA": {
         "name": "Initial Unemployment Claims",
@@ -24,6 +29,7 @@ INDICATORS = {
         "resample": "mean",
         "invert": True,  # rising claims is bad news
         "in_composite": True,
+        "transform": "pct",
     },
     "HOUST": {
         "name": "Housing Starts",
@@ -31,17 +37,17 @@ INDICATORS = {
         "resample": "mean",
         "invert": False,
         "in_composite": True,
+        "transform": "pct",
     },
-    "PPIACO": {
-        "name": "Producer Price Index",
+    "T10Y3M": {
+        "name": "10-Year minus 3-Month Treasury Yield Spread",
         "cls": "leading",
         "resample": "mean",
-        # Rising producer prices are a warning sign, not good news: commodity
-        # price spikes preceded the 1974, 1980, and 2008 recessions (they're
-        # what pushes the Fed to tighten). Invert so a PPI spike pulls the
-        # composite down like the other three components.
-        "invert": True,
+        # An inverted (negative) spread already reads as bad news the same
+        # direction the composite wants: no inversion needed, unlike claims.
+        "invert": False,
         "in_composite": True,
+        "transform": "diff",
     },
     "UMCSENT": {
         "name": "Consumer Sentiment (Consumer Confidence proxy)",
@@ -49,6 +55,7 @@ INDICATORS = {
         "resample": "mean",
         "invert": False,
         "in_composite": True,
+        "transform": "diff",
     },
     "PAYEMS": {
         "name": "Nonfarm Payrolls (Job Growth)",
@@ -56,6 +63,7 @@ INDICATORS = {
         "resample": "mean",
         "invert": False,
         "in_composite": False,
+        "transform": "pct",
     },
     "GDPC1": {
         "name": "Real GDP",
@@ -63,6 +71,7 @@ INDICATORS = {
         "resample": "ffill",
         "invert": False,
         "in_composite": False,
+        "transform": "pct",
     },
     "CPIAUCSL": {
         "name": "CPI",
@@ -70,6 +79,7 @@ INDICATORS = {
         "resample": "mean",
         "invert": False,
         "in_composite": False,
+        "transform": "pct",
     },
     "BUSINV": {
         "name": "Business Inventories",
@@ -77,6 +87,19 @@ INDICATORS = {
         "resample": "mean",
         "invert": False,
         "in_composite": False,
+        "transform": "pct",
+    },
+    "PPIACO": {
+        "name": "Producer Price Index",
+        "cls": "lagging",
+        "resample": "mean",
+        # Not a leading indicator per the Conference Board's LEI (it's not
+        # one of the ten components) — inflation confirms rather than leads.
+        # Dropped from the composite in favor of the yield spread; kept on
+        # the dashboard for context.
+        "invert": False,
+        "in_composite": False,
+        "transform": "pct",
     },
 }
 
@@ -88,6 +111,7 @@ BENCHMARKS = {
 LEADING_SERIES = [k for k, v in INDICATORS.items() if v["in_composite"]]
 COMPOSITE_WEIGHTS = {k: 1.0 / len(LEADING_SERIES) for k in LEADING_SERIES}
 COMPOSITE_THRESHOLD = -0.5  # fixed a priori, not fit to backtest results
+TRAIN_END = "2018-12-31"  # z-score training window cutoff, fixed a priori
 
 
 # ---------------------------------------------------------------------------
@@ -147,12 +171,45 @@ def to_monthly(s: pd.Series, method: str = "mean") -> pd.Series:
     raise ValueError(f"unknown resample method: {method}")
 
 
-def zscore(s: pd.Series) -> pd.Series:
-    """Standardize a series over its own full history."""
-    std = s.std()
+def transform_series(s: pd.Series, how: str) -> pd.Series:
+    """Convert a level series into a month-to-month change.
+
+    "pct"  symmetric percent change, for series measured as levels
+           (claims, housing starts, price indexes)
+    "diff" simple difference, for series already measured in percent or as a
+           bounded index (yield spreads, sentiment)
+
+    The symmetric form is what the Conference Board uses: a rise and an
+    equally sized fall come out equal and opposite, which a plain percent
+    change does not.
+    """
+    if how == "pct":
+        previous = s.shift(1)
+        denominator = s + previous
+        out = 200.0 * (s - previous) / denominator
+        out[denominator == 0] = 0.0
+        return out.dropna()
+    if how == "diff":
+        return s.diff().dropna()
+    raise ValueError(f"unknown transform: {how!r} (use 'pct' or 'diff')")
+
+
+def zscore(s: pd.Series, train_end: str | pd.Timestamp | None = None) -> pd.Series:
+    """Standardize a series using statistics from the training window only.
+
+    train_end: last date whose data may inform the mean and standard
+    deviation. Pass None to use the full history (kept for comparison, not
+    for backtesting — it lets later data flatter an earlier score).
+    """
+    window = s.loc[:train_end] if train_end else s
+    window = window.dropna()
+    if len(window) < 24:
+        raise ValueError("need at least 24 observations in the training window")
+    mean = window.mean()
+    std = window.std()
     if std == 0 or pd.isna(std):
         raise ValueError("cannot z-score a constant or all-NaN series")
-    return (s - s.mean()) / std
+    return (s - mean) / std
 
 
 def walkforward_zscore(s: pd.Series, min_periods: int = 24) -> pd.Series:
@@ -170,12 +227,15 @@ def build_composite(
     components: dict[str, pd.Series],
     weights: dict[str, float] | None = None,
     invert: set[str] | frozenset[str] = frozenset(),
-    standardize=zscore,
+    transforms: dict[str, str] | None = None,
+    train_end: str | pd.Timestamp | None = None,
 ) -> pd.Series:
-    """Align components on a common index, standardize each (full-history
-    zscore by default; pass `standardize=walkforward_zscore` for a
-    backtest-safe expanding standardization), invert sign where noted, and
-    combine with a weighted sum. Weights must sum to 1.
+    """Align components, convert each to a month-to-month change, standardize
+    on the training window, invert where noted, and combine with a weighted
+    sum.
+
+    Weights must sum to 1. transforms maps each series name to "pct" or
+    "diff"; anything missing defaults to "pct".
     """
     if weights is None:
         weights = {k: 1.0 / len(components) for k in components}
@@ -183,12 +243,18 @@ def build_composite(
         raise ValueError("weights keys must match components keys")
     if abs(sum(weights.values()) - 1.0) > 1e-9:
         raise ValueError("weights must sum to 1")
+    transforms = transforms or {}
 
-    df = pd.DataFrame(components).dropna(how="any")
+    changed = {
+        name: transform_series(series, transforms.get(name, "pct"))
+        for name, series in components.items()
+    }
+
+    df = pd.DataFrame(changed).dropna(how="any")
     if df.empty:
         raise ValueError("no overlapping dates across components")
 
-    z = df.apply(standardize).dropna(how="any")
+    z = df.apply(lambda col: zscore(col, train_end=train_end))
     for name in invert:
         if name in z.columns:
             z[name] = -z[name]
@@ -226,6 +292,18 @@ def find_recession_starts(usrec: pd.Series) -> list[pd.Timestamp]:
     prev = on.shift(1, fill_value=0)
     start_mask = (on == 1) & (prev == 0)
     return list(on.index[start_mask])
+
+
+def recessions_in_coverage(recession_starts: list, index: pd.Series) -> list:
+    """Recessions the index could possibly have warned about.
+
+    A recession is out of coverage if the index doesn't start early enough
+    to have produced a signal before it.
+    """
+    if index.empty:
+        return []
+    first = index.index.min()
+    return [r for r in recession_starts if r >= first]
 
 
 def recession_periods(usrec: pd.Series) -> list[tuple[pd.Timestamp, pd.Timestamp]]:

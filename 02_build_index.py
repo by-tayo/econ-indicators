@@ -1,7 +1,7 @@
 """Align all indicators to monthly frequency, build the leading composite
-(month-over-month change, walk-forward z-scored, equally-weighted, threshold
-fixed a priori) and a dashboard of the remaining coincident/lagging
-indicators for context.
+(month-over-month change, z-scored on a fixed training window, equally-
+weighted, threshold fixed a priori) and a dashboard of the remaining
+coincident/lagging indicators for context.
 """
 import pandas as pd
 
@@ -10,11 +10,11 @@ from econ_common import (
     DATA_PROCESSED,
     INDICATORS,
     LEADING_SERIES,
+    TRAIN_END,
     build_composite,
     load_cached,
     smooth,
     to_monthly,
-    walkforward_zscore,
 )
 
 
@@ -24,13 +24,15 @@ def main() -> None:
         raw = load_cached(series_id)
         monthly[series_id] = to_monthly(raw, method=meta["resample"])
 
-    # Level series like PPI trend for decades, which would otherwise swamp
-    # the composite with a secular ramp instead of cyclical signal. Feed the
-    # composite month-over-month % change instead, so it reflects momentum.
-    leading_components = {sid: monthly[sid].pct_change().dropna() for sid in LEADING_SERIES}
+    # Levels get converted to changes and standardized inside build_composite
+    # (transform_series + zscore) — see INDICATORS["transform"] per series.
+    leading_components = {sid: monthly[sid] for sid in LEADING_SERIES}
+    transforms = {sid: INDICATORS[sid]["transform"] for sid in LEADING_SERIES}
     invert = {sid for sid in LEADING_SERIES if INDICATORS[sid]["invert"]}
 
-    composite = build_composite(leading_components, COMPOSITE_WEIGHTS, invert, standardize=walkforward_zscore)
+    composite = build_composite(
+        leading_components, COMPOSITE_WEIGHTS, invert, transforms=transforms, train_end=TRAIN_END
+    )
     composite_smoothed = smooth(composite, window=3)
 
     DATA_PROCESSED.mkdir(parents=True, exist_ok=True)

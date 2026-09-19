@@ -1,3 +1,4 @@
+import numpy as np
 import pandas as pd
 import pytest
 
@@ -8,8 +9,10 @@ from econ_common import (
     find_recession_starts,
     months_between,
     recession_periods,
+    recessions_in_coverage,
     smooth,
     to_monthly,
+    transform_series,
     walkforward_zscore,
     zscore,
 )
@@ -20,20 +23,87 @@ def monthly_index(start: str, periods: int) -> pd.DatetimeIndex:
 
 
 # ---------------------------------------------------------------------------
-# zscore / to_monthly / smooth
+# transform_series
+# ---------------------------------------------------------------------------
+
+def test_transform_series_pct_is_symmetric():
+    s = pd.Series([100.0, 110.0, 100.0])
+    out = transform_series(s, "pct")
+    assert out.iloc[0] == pytest.approx(-out.iloc[1])
+
+
+def test_transform_series_diff_is_simple_difference():
+    s = pd.Series([1.0, 3.0, 6.0])
+    out = transform_series(s, "diff")
+    assert list(out) == [2.0, 3.0]
+
+
+def test_transform_series_rejects_unknown_transform():
+    with pytest.raises(ValueError):
+        transform_series(pd.Series([1.0, 2.0]), "bogus")
+
+
+def test_components_measure_the_cycle_not_the_calendar():
+    """A transformed component should not be strongly correlated with time.
+
+    A raw level series that trends (PPI, housing starts) correlates near 1.0
+    with a time counter. After transforming to changes, that correlation
+    should collapse. If it doesn't, the index is measuring what year it is.
+    """
+    trending = pd.Series(
+        np.exp(np.linspace(0, 2, 240)),
+        index=pd.date_range("2000-01-01", periods=240, freq="MS"),
+    )
+    time_counter = np.arange(len(trending))
+
+    raw_corr = abs(np.corrcoef(trending.values, time_counter)[0, 1])
+    changed = transform_series(trending, "pct")
+    changed_corr = abs(np.corrcoef(changed.values, time_counter[1:])[0, 1])
+
+    assert raw_corr > 0.9        # the level is basically a clock
+    assert changed_corr < 0.3    # the change is not
+
+
+# ---------------------------------------------------------------------------
+# zscore / walkforward_zscore / to_monthly / smooth
 # ---------------------------------------------------------------------------
 
 def test_zscore_mean_zero_std_one():
-    s = pd.Series([1, 2, 3, 4, 5], dtype=float)
+    idx = monthly_index("2020-01-01", 30)
+    s = pd.Series(range(1, 31), index=idx, dtype=float)
     z = zscore(s)
     assert z.mean() == pytest.approx(0, abs=1e-9)
     assert z.std() == pytest.approx(1, abs=1e-9)
 
 
 def test_zscore_rejects_constant_series():
-    s = pd.Series([5, 5, 5], dtype=float)
+    idx = monthly_index("2020-01-01", 30)
+    s = pd.Series([5.0] * 30, index=idx)
     with pytest.raises(ValueError):
         zscore(s)
+
+
+def test_zscore_rejects_short_training_window():
+    idx = monthly_index("2020-01-01", 10)
+    s = pd.Series(range(10), index=idx, dtype=float)
+    with pytest.raises(ValueError):
+        zscore(s)
+
+
+def test_zscore_uses_training_window_only():
+    # Stable values through the training window, then a wild swing after
+    # train_end. A full-history zscore lets the wild values drag the mean/std
+    # used to score the training-window points; a train-window zscore does not.
+    idx = monthly_index("2020-01-01", 30)
+    values = list(range(1, 25)) + [1000.0, -1000.0, 2000.0, -2000.0, 500.0, -500.0]
+    s = pd.Series(values, index=idx, dtype=float)
+    train_end = idx[23]
+
+    z_trained = zscore(s, train_end=train_end)
+    z_full = zscore(s, train_end=None)
+
+    assert not z_trained.iloc[:24].equals(z_full.iloc[:24])
+    assert z_trained.iloc[:24].mean() == pytest.approx(0, abs=1e-6)
 
 
 def test_walkforward_zscore_ignores_future_values():
@@ -84,19 +154,21 @@ def test_smooth_is_rolling_mean():
 # ---------------------------------------------------------------------------
 
 def test_build_composite_equal_weight_average_of_zscores():
-    idx = monthly_index("2020-01-01", 5)
-    a = pd.Series([1, 2, 3, 4, 5], index=idx, dtype=float)
-    b = pd.Series([5, 4, 3, 2, 1], index=idx, dtype=float)
-    composite = build_composite({"a": a, "b": b})
+    idx = monthly_index("2020-01-01", 30)
+    values = (np.arange(30) ** 2).astype(float)
+    a = pd.Series(values, index=idx)
+    b = pd.Series(-values, index=idx)
+    composite = build_composite({"a": a, "b": b}, transforms={"a": "diff", "b": "diff"})
     # a and b are mirror images with equal weight -> composite is ~0 everywhere
     assert composite.abs().max() == pytest.approx(0, abs=1e-9)
 
 
 def test_build_composite_inverts_named_series():
-    idx = monthly_index("2020-01-01", 5)
-    a = pd.Series([1, 2, 3, 4, 5], index=idx, dtype=float)
+    idx = monthly_index("2020-01-01", 30)
+    a = pd.Series(np.arange(10.0, 40.0), index=idx)
     composite = build_composite({"a": a}, weights={"a": 1.0}, invert={"a"})
-    assert (composite == -zscore(a)).all()
+    expected = -zscore(transform_series(a, "pct"), train_end=None)
+    assert composite.equals(expected)
 
 
 def test_build_composite_rejects_bad_weights():
@@ -107,23 +179,26 @@ def test_build_composite_rejects_bad_weights():
 
 
 def test_build_composite_only_uses_overlapping_dates():
-    a = pd.Series([1.0, 2.0, 3.0], index=monthly_index("2020-01-01", 3))
-    b = pd.Series([1.0, 2.0], index=monthly_index("2020-01-01", 2))
-    composite = build_composite({"a": a, "b": b})
-    assert len(composite) == 2
+    a_idx = monthly_index("2020-01-01", 30)
+    b_idx = monthly_index("2020-04-01", 27)  # starts 3 months later, ends the same month as a
+    a = pd.Series(np.arange(30.0) ** 2 + 1.0, index=a_idx)
+    b = pd.Series(np.arange(27.0) ** 1.7 + 1.0, index=b_idx)
+    composite = build_composite({"a": a, "b": b}, transforms={"a": "diff", "b": "diff"})
+    assert len(composite) == 26  # diff(b) has 26 points, all within diff(a)'s range
 
 
-def test_build_composite_accepts_alternate_standardize_fn():
-    idx = monthly_index("2020-01-01", 6)
-    a = pd.Series([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], index=idx)
-    composite = build_composite({"a": a}, weights={"a": 1.0}, standardize=walkforward_zscore)
-    # walkforward_zscore(min_periods=24) never has enough history in a
-    # 6-point series, so every point is dropped by the post-standardize dropna.
-    assert composite.empty
+def test_build_composite_respects_train_end():
+    idx = monthly_index("2020-01-01", 30)
+    a = pd.Series(np.arange(30.0) ** 2 + 1.0, index=idx)
+    composite_full = build_composite({"a": a}, weights={"a": 1.0}, transforms={"a": "diff"}, train_end=None)
+    composite_trained = build_composite(
+        {"a": a}, weights={"a": 1.0}, transforms={"a": "diff"}, train_end=idx[24]
+    )
+    assert not composite_full.equals(composite_trained)
 
 
 # ---------------------------------------------------------------------------
-# find_crossings / find_recession_starts / months_between
+# find_crossings / find_recession_starts / months_between / recessions_in_coverage
 # ---------------------------------------------------------------------------
 
 def test_find_crossings_detects_downward_crossing_only():
@@ -152,6 +227,17 @@ def test_months_between():
     b = pd.Timestamp("2020-06-01")
     assert months_between(a, b) == 5
     assert months_between(b, a) == -5
+
+
+def test_recessions_in_coverage_filters_out_recessions_before_index_start():
+    idx = monthly_index("1990-01-01", 5)
+    index_series = pd.Series([1.0] * 5, index=idx)
+    starts = [pd.Timestamp("1980-01-01"), pd.Timestamp("1990-03-01")]
+    assert recessions_in_coverage(starts, index_series) == [pd.Timestamp("1990-03-01")]
+
+
+def test_recessions_in_coverage_empty_index_returns_empty():
+    assert recessions_in_coverage([pd.Timestamp("1990-01-01")], pd.Series(dtype=float)) == []
 
 
 # ---------------------------------------------------------------------------

@@ -1,9 +1,10 @@
 indicator,series_id,class,latest_date,latest_value,value_12mo_ago,trend
 Initial Unemployment Claims,ICSA,leading,2026-09-01,201000.0,234000.0,Falling
 Housing Starts,HOUST,leading,2026-08-01,1275.0,1291.0,Falling
-Producer Price Index,PPIACO,leading,2026-08-01,287.93,262.11,Rising
+10-Year minus 3-Month Treasury Yield Spread,T10Y3M,leading,2026-09-01,0.88,0.05,Rising
 Consumer Sentiment (Consumer Confidence proxy),UMCSENT,leading,2026-07-01,55.2,61.7,Falling
 Nonfarm Payrolls (Job Growth),PAYEMS,coincident,2026-08-01,159075.0,158472.0,Flat
 Real GDP,GDPC1,coincident/lagging,2026-04-01,24269.61,23770.98,Rising
 CPI,CPIAUCSL,lagging,2026-08-01,334.13,323.29,Rising
 Business Inventories,BUSINV,lagging,2026-07-01,2764708.0,2663019.0,Rising
+Producer Price Index,PPIACO,lagging,2026-08-01,287.93,262.11,Rising

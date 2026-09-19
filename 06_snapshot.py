@@ -1,4 +1,4 @@
-"""Build a current-values snapshot across all 8 book indicators: latest
+"""Build a current-values snapshot across all 9 book indicators: latest
 value, value 12 months prior, and direction. Writes output/snapshot.csv and
 prints a ready-to-paste markdown table.
 """
