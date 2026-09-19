@@ -24,6 +24,25 @@ Two benchmark series are also pulled, but never used as composite inputs:
 - **`USREC`** — the NBER recession indicator (the ground truth the composite is scored against).
 - **`USSLIND`** — the Philadelphia Fed's own "Leading Index for the United States." This is the Conference Board's official LEI's free cousin; it's included only as a secondary reference series, never as an input, since using someone else's leading index to build your own would be circular. (Note: this particular FRED series stops updating in early 2020 in the cached pull — treat it as historical context, not a live benchmark.)
 
+## Current snapshot
+
+Latest value per indicator vs. 12 months prior (`python 06_snapshot.py`, as of the last `01_fetch_data.py` run):
+
+| Indicator | Class | Latest | as of | 12mo ago | Trend |
+|---|---|---|---|---|---|
+| Initial Unemployment Claims | leading | 201,000 | 2026-09-01 | 234,000 | Falling |
+| Housing Starts | leading | 1,275 | 2026-08-01 | 1,291 | Falling |
+| Producer Price Index | leading | 287.93 | 2026-08-01 | 262.11 | Rising |
+| Consumer Sentiment (Consumer Confidence proxy) | leading | 55.2 | 2026-07-01 | 61.7 | Falling |
+| Nonfarm Payrolls (Job Growth) | coincident | 159,075 | 2026-08-01 | 158,472 | Flat |
+| Real GDP | coincident/lagging | 24,269.61 | 2026-04-01 | 23,770.98 | Rising |
+| CPI | lagging | 334.13 | 2026-08-01 | 323.29 | Rising |
+| Business Inventories | lagging | 2,764,708 | 2026-07-01 | 2,663,019 | Rising |
+
+Note "Falling" for Initial Claims is *good* news (fewer people filing for unemployment) — direction alone doesn't say good or bad the same way across every row, which is exactly why the indicator table above spells out what each series measures.
+
+![Leading indicators panel](output/indicator_panel.png)
+
 ## Methodology
 
 1. **Fetch** all series from FRED, caching raw pulls to `data/raw/` so reruns don't hit the API.
@@ -51,6 +70,8 @@ Run against every U.S. recession from 1970 to 2020 (`python 03_backtest.py`):
 | 2020-03 | — | — | ❌ |
 
 **2/8 recessions caught**, average lead time when it did catch one: **4 months**. One false positive (a threshold crossing in **1991-11** with no recession following within 12 months).
+
+![Composite index vs. NBER recessions](output/index_vs_recessions.png)
 
 ### Honest evaluation
 
@@ -82,6 +103,8 @@ python 01_fetch_data.py      # pull all series, cache to data/raw/
 python 02_build_index.py     # build the composite + dashboard series
 python 03_backtest.py        # score against NBER recessions, writes output/results.csv
 python 04_plot_results.py    # writes output/index_vs_recessions.png
+python 05_indicator_panel.py # writes output/indicator_panel.png
+python 06_snapshot.py        # writes output/snapshot.csv + prints the markdown table above
 ```
 
 Run the test suite (no API key needed — it only exercises the pure math):
@@ -99,8 +122,10 @@ econ_common.py       # FRED fetch + caching, index math, backtest scoring (unit-
 02_build_index.py      # build composite + dashboard
 03_backtest.py         # score vs. USREC, write results.csv
 04_plot_results.py     # chart composite vs. recessions
+05_indicator_panel.py  # small-multiples chart of the 4 leading indicators
+06_snapshot.py          # latest-value snapshot across all 8 indicators
 tests/                 # pytest suite for econ_common.py
 data/raw/              # cached raw FRED pulls (gitignored)
 data/processed/        # composite + dashboard series (gitignored)
-output/                # results.csv + chart (committed)
+output/                # results.csv, snapshot.csv, charts (committed)
 ```
