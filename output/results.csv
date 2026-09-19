@@ -1,0 +1,9 @@
+recession_start,signal_date,lead_months,hit
+1970-02-01,,,False
+1974-02-01,,,False
+1980-02-01,1979-12-01,2.0,True
+1981-08-01,1981-02-01,6.0,True
+1990-08-01,,,False
+2001-04-01,,,False
+2008-01-01,,,False
+2020-03-01,,,False
