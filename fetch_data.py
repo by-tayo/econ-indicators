@@ -100,7 +100,12 @@ def fetch_series(series_id: str, key: str, start: str = START, session=None,
 
 
 def year_ago(df: pd.DataFrame) -> pd.Series:
-    """For each date, the reading closest to one year earlier (within 10 days), else NaN."""
+    """For each date, the reading closest to one year earlier, else NaN.
+
+    "Closest" can fall a few days before or after the exact one-year-back date, and it must be
+    within 10 days. Monthly and quarterly series match exactly; weekly and daily series
+    match the nearest available date.
+    """
     left = pd.DataFrame({"target": df["date"] - pd.DateOffset(years=1)})
     right = df.rename(columns={"date": "ago_date", "value": "ago"})
     m = pd.merge_asof(left, right, left_on="target", right_on="ago_date",
@@ -178,6 +183,27 @@ def build(frames: dict, usrec: pd.DataFrame, fetched_on: str):
     return obs, summary, rec
 
 
+def write_csvs(out: Path, tables: dict) -> None:
+    """Write every table to a temp file first, then move each into place.
+
+    If any write fails, the temp files are removed and the files already in `out` are left
+    as they were. Moving a file into place is a single rename, so the old files are only
+    replaced once all of the new ones have been written in full.
+    """
+    out.mkdir(parents=True, exist_ok=True)
+    temps = {}
+    try:
+        for name, table in tables.items():
+            tmp = out / f".{name}.tmp"
+            temps[name] = tmp
+            table.to_csv(tmp, index=False)
+        for name, tmp in temps.items():
+            os.replace(tmp, out / name)
+    finally:
+        for tmp in temps.values():
+            tmp.unlink(missing_ok=True)   # nothing left behind; already moved files are gone
+
+
 def run(key: str, out: Path, start: str = START, session=None, log=print) -> None:
     frames = {}
     for sid, *_ in SERIES:
@@ -186,10 +212,8 @@ def run(key: str, out: Path, start: str = START, session=None, log=print) -> Non
     usrec = fetch_series(RECESSION_ID, key, start, session)
     log(f"  {RECESSION_ID}: {len(usrec)} months")
     obs, summary, rec = build(frames, usrec, datetime.now(timezone.utc).date().isoformat())
-    out.mkdir(parents=True, exist_ok=True)           # reached only if every series succeeded
-    obs.to_csv(out / "observations.csv", index=False)
-    summary.to_csv(out / "series_summary.csv", index=False)
-    rec.to_csv(out / "recessions.csv", index=False)
+    # reached only if every series succeeded
+    write_csvs(out, {"observations.csv": obs, "series_summary.csv": summary, "recessions.csv": rec})
     log(f"Wrote {len(obs):,} rows to {out / 'observations.csv'}, plus series_summary.csv and recessions.csv")
 
 
@@ -207,6 +231,10 @@ def main(argv=None) -> int:
         run(key, Path(args.out), args.start)
     except FetchError as e:
         print(f"Stopped, nothing was written: {e}", file=sys.stderr)
+        return 1
+    except OSError as e:
+        # only the OS error text, never the exception object: it could carry a request URL
+        print(f"Stopped, could not write the files: {e.strerror or type(e).__name__}", file=sys.stderr)
         return 1
     return 0
 
